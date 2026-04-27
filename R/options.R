@@ -231,9 +231,16 @@ ClaudeOptions <- R6::R6Class(
     },
 
     #' @description Build the CLI argument vector from these options.
+    #' @param bidirectional Whether to build args for live stdin/stdout
+    #'   `stream-json` mode instead of one-shot `--print` mode.
     #' @return Character vector of CLI flags.
-    to_cli_args = function() {
-      args <- c("--output-format", "stream-json", "--verbose", "--print")
+    to_cli_args = function(bidirectional = FALSE) {
+      args <- c("--output-format", "stream-json", "--verbose")
+      if (isTRUE(bidirectional)) {
+        args <- c(args, "--input-format", "stream-json")
+      } else {
+        args <- c(args, "--print")
+      }
 
       if (!is.null(self$model)) {
         args <- c(args, "--model", self$model)

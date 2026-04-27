@@ -53,6 +53,44 @@ start_transport <- function(prompt, options) {
   proc
 }
 
+#' Start a bidirectional Claude CLI subprocess
+#'
+#' @param options A `ClaudeOptions` object.
+#' @return A `processx::process` object.
+#' @keywords internal
+start_bidirectional_transport <- function(options) {
+  cli_path <- find_claude_cli()
+  args <- options$to_cli_args(bidirectional = TRUE)
+
+  if (!is.null(options$mcp_servers) && length(options$mcp_servers) > 0) {
+    mcp_file <- tempfile(fileext = ".json")
+    jsonlite::write_json(
+      list(mcpServers = options$mcp_servers),
+      mcp_file,
+      auto_unbox = TRUE,
+      pretty     = FALSE
+    )
+    args <- c(args, "--mcp-config", mcp_file)
+  }
+
+  command <- cli_path
+  if (!is.null(options$user) && nzchar(options$user)) {
+    command <- "sudo"
+    args <- c("-u", options$user, cli_path, args)
+  }
+
+  processx::process$new(
+    command = command,
+    args    = args,
+    stdin   = "|",
+    stdout  = "|",
+    stderr  = "|",
+    wd      = options$working_dir,
+    env     = normalize_env(options$env),
+    cleanup = TRUE
+  )
+}
+
 #' Send a follow-up message to a running Claude process
 #'
 #' @param proc A `processx::process` object.
@@ -68,6 +106,56 @@ send_message <- function(proc, prompt) {
   cli::cli_abort(
     "Follow-up prompts are not sent to a live Claude subprocess. Start a new transport with {.arg --resume} instead."
   )
+}
+
+send_live_user_message <- function(proc, prompt, session_id = "default") {
+  if (is.null(prompt) || !nzchar(trimws(as.character(prompt)))) {
+    cli::cli_abort("{.arg prompt} must be a non-empty string.")
+  }
+  if (!proc$is_alive()) {
+    cli::cli_abort("Claude process is no longer running.")
+  }
+
+  payload <- list(
+    type = "user",
+    session_id = session_id %||% "default",
+    message = list(
+      role = "user",
+      content = prompt
+    ),
+    parent_tool_use_id = NULL
+  )
+  proc$write_input(paste0(jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null"), "\n"))
+  invisible(NULL)
+}
+
+send_control_response <- function(proc, request_id, response = list(), error = NULL) {
+  if (!proc$is_alive()) {
+    cli::cli_abort("Claude process is no longer running.")
+  }
+
+  payload <- if (is.null(error)) {
+    list(
+      type = "control_response",
+      response = list(
+        subtype = "success",
+        request_id = request_id,
+        response = response
+      )
+    )
+  } else {
+    list(
+      type = "control_response",
+      response = list(
+        subtype = "error",
+        request_id = request_id,
+        error = error
+      )
+    )
+  }
+
+  proc$write_input(paste0(jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null"), "\n"))
+  invisible(NULL)
 }
 
 #' Read and stream all messages until result

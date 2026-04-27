@@ -71,6 +71,15 @@ test_that("to_cli_args includes required base flags", {
   expect_true("--print"         %in% args)
 })
 
+test_that("to_cli_args supports bidirectional stream-json mode", {
+  args <- ClaudeOptions$new(permission_prompt_tool_name = "stdio")$to_cli_args(bidirectional = TRUE)
+  expect_true("--input-format" %in% args)
+  expect_true("--output-format" %in% args)
+  expect_true("--permission-prompt-tool" %in% args)
+  expect_true("stdio" %in% args)
+  expect_false("--print" %in% args)
+})
+
 test_that("to_cli_args includes --resume when session id is set", {
   args <- ClaudeOptions$new(resume_session_id = "session-123")$to_cli_args()
   idx <- which(args == "--resume")
@@ -435,6 +444,21 @@ test_that("hook_block returns block action with custom reason", {
   result <- hook_block("Too dangerous")
   expect_equal(result$action, "block")
   expect_equal(result$reason, "Too dangerous")
+})
+
+test_that("permission helpers normalize control protocol responses", {
+  expect_equal(
+    claudeAgentR:::normalize_permission_result(permission_allow()),
+    list(behavior = "allow")
+  )
+  expect_equal(
+    claudeAgentR:::normalize_permission_result(permission_deny("No")),
+    list(behavior = "deny", message = "No")
+  )
+  expect_equal(
+    claudeAgentR:::normalize_permission_result(hook_block("Blocked")),
+    list(behavior = "deny", message = "Blocked")
+  )
 })
 
 test_that("HookRegistry blocks on matching pre-hook", {

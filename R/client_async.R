@@ -40,9 +40,17 @@ ClaudeAsyncClient <- R6::R6Class(
     #' @description Create a new `ClaudeAsyncClient`.
     #' @param options A `ClaudeOptions` object.
     #' @param hooks A `HookRegistry` or `NULL`.
-    initialize = function(options = NULL, hooks = NULL) {
+    #' @param tool_permission_callback Optional callback for Claude CLI
+    #'   `can_use_tool` control requests. It may return `permission_allow()`,
+    #'   `permission_deny()`, or a promise resolving to either.
+    initialize = function(options = NULL, hooks = NULL, tool_permission_callback = NULL) {
       private$options <- options %||% ClaudeOptions$new()
       private$hooks   <- hooks
+      private$tool_permission_callback <- tool_permission_callback
+      if (!is.null(tool_permission_callback) &&
+          is.null(private$options$permission_prompt_tool_name)) {
+        private$options$permission_prompt_tool_name <- "stdio"
+      }
     },
 
     #' @description
@@ -103,6 +111,7 @@ ClaudeAsyncClient <- R6::R6Class(
       private$proc <- NULL
       private$connected <- FALSE
       private$session_id <- NULL
+      private$live_started <- FALSE
       invisible(NULL)
     }
   ),
@@ -111,9 +120,11 @@ ClaudeAsyncClient <- R6::R6Class(
     proc      = NULL,
     options   = NULL,
     hooks     = NULL,
+    tool_permission_callback = NULL,
     connected = FALSE,
     closed    = FALSE,
     session_id = NULL,
+    live_started = FALSE,
 
     store_result = function(result) {
       self$last_messages <- result$messages
@@ -124,24 +135,39 @@ ClaudeAsyncClient <- R6::R6Class(
 
     run_turn = function(prompt, on_message, resume) {
       private$closed <- FALSE
+      if (!is.null(private$tool_permission_callback)) {
+        if (is.null(private$proc) || !private$proc$is_alive()) {
+          private$proc <- start_bidirectional_transport(private$options)
+          private$live_started <- TRUE
+        }
+        send_live_user_message(
+          private$proc,
+          prompt,
+          if (resume) private$session_id %||% "default" else "default"
+        )
+        return(private$stream_promise(on_message, keep_process = TRUE))
+      }
+
       if (resume) {
         private$options$resume_session_id <- private$session_id
       } else {
         private$options$resume_session_id <- NULL
       }
       private$proc <- start_transport(prompt, private$options)
-      private$stream_promise(on_message)
+      private$stream_promise(on_message, keep_process = FALSE)
     },
 
     # Returns a promise that resolves when a result message arrives,
     # using later-based non-blocking polling.
-    stream_promise = function(on_message) {
+    stream_promise = function(on_message, keep_process = FALSE) {
       proc            <- private$proc
       hooks           <- private$hooks
+      permission_callback <- private$tool_permission_callback
       messages        <- list()
       text_parts      <- character(0)
       tool_use_inputs <- list()
       deadline        <- Sys.time() + private$options$timeout
+      waiting_control <- FALSE
 
       # Capture self for use inside async callbacks
       self_ref <- self
@@ -160,6 +186,11 @@ ClaudeAsyncClient <- R6::R6Class(
           }
 
           tryCatch({
+            if (waiting_control) {
+              later::later(poll, delay = 0.05)
+              return()
+            }
+
             ready <- proc$poll_io(0)
             lines <- if (identical(ready[["output"]], "ready")) {
               proc$read_output_lines(n = 100)
@@ -173,6 +204,72 @@ ClaudeAsyncClient <- R6::R6Class(
                 max_buffer_size = self_ref$.__enclos_env__$private$options$max_buffer_size
               )
               if (is.null(msg)) next
+
+              if (identical(msg$type, "control_request")) {
+                request_id <- msg$request_id
+                request <- msg$request %||% list()
+                subtype <- request$subtype %||% ""
+
+                if (identical(subtype, "can_use_tool")) {
+                  context <- list(
+                    request_id = request_id,
+                    permission_suggestions = request$permission_suggestions %||% list(),
+                    blocked_path = request$blocked_path %||% NULL
+                  )
+                  callback_result <- tryCatch({
+                    if (is.null(permission_callback)) {
+                      permission_allow()
+                    } else {
+                      permission_callback(
+                        request$tool_name %||% "",
+                        request$input %||% list(),
+                        context
+                      )
+                    }
+                  }, error = function(e) e)
+
+                  if (inherits(callback_result, "condition")) {
+                    send_control_response(proc, request_id, error = conditionMessage(callback_result))
+                  } else if (promises::is.promise(callback_result)) {
+                    waiting_control <<- TRUE
+                    promises::`%...>%`(
+                      callback_result,
+                      (function(value) {
+                        send_control_response(
+                          proc,
+                          request_id,
+                          normalize_permission_result(value)
+                        )
+                        waiting_control <<- FALSE
+                        later::later(poll, delay = 0)
+                      })
+                    ) %...!% (function(err) {
+                      message <- if (inherits(err, "condition")) conditionMessage(err) else as.character(err)
+                      send_control_response(proc, request_id, error = message)
+                      waiting_control <<- FALSE
+                      later::later(poll, delay = 0)
+                    })
+                    return()
+                  } else {
+                    send_control_response(
+                      proc,
+                      request_id,
+                      normalize_permission_result(callback_result)
+                    )
+                  }
+                } else if (identical(subtype, "initialize")) {
+                  send_control_response(proc, request_id, list(status = "ok"))
+                } else if (identical(subtype, "hook_callback")) {
+                  send_control_response(proc, request_id, list(continue = TRUE))
+                } else {
+                  send_control_response(proc, request_id, list())
+                }
+                next
+              }
+
+              if (identical(msg$type, "control_response")) {
+                next
+              }
 
               messages <<- c(messages, list(msg))
 
@@ -230,7 +327,9 @@ ClaudeAsyncClient <- R6::R6Class(
                   result   = msg
                 )
                 self_ref$.__enclos_env__$private$store_result(r)
-                self_ref$.__enclos_env__$private$proc <- NULL
+                if (!keep_process) {
+                  self_ref$.__enclos_env__$private$proc <- NULL
+                }
                 resolve(r)
                 return()
               }
@@ -296,6 +395,9 @@ ClaudeAsyncClient <- R6::R6Class(
 #' @param env Named environment overrides for the subprocess.
 #' @param max_buffer_size Maximum accepted stream JSON line size in bytes.
 #' @param user Optional Unix user to execute via `sudo -u`.
+#' @param tool_permission_callback Optional callback for Claude CLI
+#'   `can_use_tool` requests. May return `permission_allow()`,
+#'   `permission_deny()`, or a promise resolving to either.
 #' @param hooks A `HookRegistry` object or `NULL`.
 #' @return A `ClaudeAsyncClient` object.
 #'
@@ -338,6 +440,7 @@ claude_async_client <- function(
   env              = NULL,
   max_buffer_size  = 1024 * 1024,
   user             = NULL,
+  tool_permission_callback = NULL,
   hooks            = NULL
 ) {
   opts <- ClaudeOptions$new(
@@ -371,5 +474,9 @@ claude_async_client <- function(
     max_buffer_size  = max_buffer_size,
     user             = user
   )
-  ClaudeAsyncClient$new(options = opts, hooks = hooks)
+  ClaudeAsyncClient$new(
+    options = opts,
+    hooks = hooks,
+    tool_permission_callback = tool_permission_callback
+  )
 }
