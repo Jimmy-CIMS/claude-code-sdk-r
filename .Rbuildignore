@@ -1,0 +1,7 @@
+^\.Rbuildignore$
+^\.git$
+^\.gitignore$
+^README\.md$
+^NEWS\.md$
+^.*\.Rproj$
+^\.Rproj\.user$

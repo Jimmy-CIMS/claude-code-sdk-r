@@ -1,0 +1,17 @@
+# RStudio
+.Rproj.user/
+*.Rhistory
+*.RData
+*.Ruserdata
+
+# R package build artifacts
+/doc/
+/Meta/
+/man/*.Rd
+NAMESPACE.bak
+
+# devtools / roxygen2
+/.Rd2pdf*
+
+# macOS
+.DS_Store

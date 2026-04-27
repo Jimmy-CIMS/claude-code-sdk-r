@@ -1,0 +1,24 @@
+Package: claudeAgentR
+Title: Claude Agent SDK for R
+Version: 0.1.0
+Authors@R:
+    person("First", "Last", email = "author@example.com", role = c("aut", "cre"))
+Description: An R SDK for programmatically interacting with Claude Code CLI,
+    mirroring the design of the official Python and Java Claude Agent SDKs.
+    Supports one-shot queries, multi-turn blocking conversations, async streaming,
+    hooks for tool interception, and MCP server integration.
+License: Apache License (>= 2)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    R6,
+    processx,
+    jsonlite,
+    promises,
+    later,
+    cli
+Suggests:
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
