@@ -2,8 +2,7 @@
 #'
 #' @description
 #' `ClaudeAsyncClient` wraps Claude Code CLI calls in `promises::promise`,
-#' using `later` for non-blocking event-loop polling. This mirrors
-#' `ClaudeAsyncClient` from the Java SDK.
+#' using `later` for non-blocking event-loop polling.
 #'
 #' Ideal for use inside **Shiny** apps or any context that already runs an
 #' event loop (`later::run_now()` for scripts).
@@ -47,7 +46,7 @@ ClaudeAsyncClient <- R6::R6Class(
     },
 
     #' @description
-    #' Start the subprocess and return a `promise` that resolves to the full
+    #' Start a Claude session and return a `promise` that resolves to the full
     #' result list (`text`, `messages`, `result`).
     #' @param prompt Character string.
     #' @param on_message Optional `function(msg)` called per streamed message.
@@ -58,9 +57,13 @@ ClaudeAsyncClient <- R6::R6Class(
           "Already connected. Use $query() for follow-up turns."
         ))
       }
-      private$proc      <- start_transport(prompt, private$options)
-      private$connected <- TRUE
-      private$stream_promise(on_message)
+      promises::`%...>%`(
+        private$run_turn(prompt, on_message, resume = FALSE),
+        (function(r) {
+          private$connected <- TRUE
+          r
+        })
+      )
     },
 
     #' @description
@@ -68,7 +71,7 @@ ClaudeAsyncClient <- R6::R6Class(
     #' @param prompt Character string.
     #' @return A `promise<character>`.
     connect_text = function(prompt) {
-      self$connect(prompt) %...>% (function(r) r$text)
+      promises::`%...>%`(self$connect(prompt), (function(r) r$text))
     },
 
     #' @description
@@ -80,8 +83,7 @@ ClaudeAsyncClient <- R6::R6Class(
       if (!private$connected) {
         return(promises::promise_reject("Not connected. Call $connect() first."))
       }
-      send_message(private$proc, prompt)
-      private$stream_promise(on_message)
+      private$run_turn(prompt, on_message, resume = TRUE)
     },
 
     #' @description
@@ -89,16 +91,18 @@ ClaudeAsyncClient <- R6::R6Class(
     #' @param prompt Character string.
     #' @return A `promise<character>`.
     query_text = function(prompt) {
-      self$query(prompt) %...>% (function(r) r$text)
+      promises::`%...>%`(self$query(prompt), (function(r) r$text))
     },
 
-    #' @description Terminate the subprocess and cancel any pending promise.
+    #' @description Forget the stored Claude session and cancel any pending promise.
     close = function() {
       private$closed <- TRUE
       if (!is.null(private$proc) && private$proc$is_alive()) {
         private$proc$kill()
       }
+      private$proc <- NULL
       private$connected <- FALSE
+      private$session_id <- NULL
       invisible(NULL)
     }
   ),
@@ -109,11 +113,24 @@ ClaudeAsyncClient <- R6::R6Class(
     hooks     = NULL,
     connected = FALSE,
     closed    = FALSE,
+    session_id = NULL,
 
     store_result = function(result) {
       self$last_messages <- result$messages
       self$last_text     <- result$text
       self$last_result   <- result$result
+      private$session_id <- extract_session_id(result)
+    },
+
+    run_turn = function(prompt, on_message, resume) {
+      private$closed <- FALSE
+      if (resume) {
+        private$options$resume_session_id <- private$session_id
+      } else {
+        private$options$resume_session_id <- NULL
+      }
+      private$proc <- start_transport(prompt, private$options)
+      private$stream_promise(on_message)
     },
 
     # Returns a promise that resolves when a result message arrives,
@@ -210,6 +227,7 @@ ClaudeAsyncClient <- R6::R6Class(
                   result   = msg
                 )
                 self_ref$.__enclos_env__$private$store_result(r)
+                self_ref$.__enclos_env__$private$proc <- NULL
                 resolve(r)
                 return()
               }
@@ -218,15 +236,11 @@ ClaudeAsyncClient <- R6::R6Class(
             if (!proc$is_alive() && length(lines) == 0) {
               stderr_out <- proc$read_all_error()
               if (nzchar(stderr_out)) {
+                self_ref$.__enclos_env__$private$proc <- NULL
                 reject(paste("Claude process exited:", stderr_out))
               } else {
-                r <- list(
-                  messages = messages,
-                  text     = paste(text_parts, collapse = ""),
-                  result   = NULL
-                )
-                self_ref$.__enclos_env__$private$store_result(r)
-                resolve(r)
+                self_ref$.__enclos_env__$private$proc <- NULL
+                reject("Claude process exited without emitting a result message.")
               }
               return()
             }

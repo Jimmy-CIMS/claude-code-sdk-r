@@ -42,6 +42,29 @@ is_result_message <- function(msg) {
   identical(msg$type, "result")
 }
 
+#' Extract Claude session id from a completed turn
+#'
+#' @param result Completed turn result list with `messages` and `result`.
+#' @return Character session id or `NULL`.
+#' @keywords internal
+extract_session_id <- function(result) {
+  from_result <- result$result$session_id %||% NULL
+  if (!is.null(from_result) && nzchar(from_result)) {
+    return(from_result)
+  }
+
+  for (msg in (result$messages %||% list())) {
+    if (identical(msg$type, "system") &&
+        identical(msg$subtype, "init") &&
+        !is.null(msg$session_id) &&
+        nzchar(msg$session_id)) {
+      return(msg$session_id)
+    }
+  }
+
+  NULL
+}
+
 #' Check whether a parsed message is a tool-use block
 #'
 #' @param msg Parsed message list.
@@ -80,7 +103,7 @@ print_message <- function(msg) {
       }
     },
     result    = {
-      cost <- msg$cost_usd %||% 0
+      cost <- msg$total_cost_usd %||% msg$cost_usd %||% 0
       cli::cli_alert_info(
         "[result] subtype={msg$subtype} cost=${round(cost, 6)}"
       )

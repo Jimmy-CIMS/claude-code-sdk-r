@@ -53,6 +53,9 @@ ClaudeOptions <- R6::R6Class(
     #'   `env` fields, keyed by server name.
     mcp_servers = NULL,
 
+    #' @field resume_session_id Existing Claude session id to resume.
+    resume_session_id = NULL,
+
     #' @description Create a new `ClaudeOptions` object.
     #' @param model Model identifier string.
     #' @param system_prompt System prompt string.
@@ -77,7 +80,8 @@ ClaudeOptions <- R6::R6Class(
       max_tokens = NULL,
       timeout = 300,
       working_dir = NULL,
-      mcp_servers = NULL
+      mcp_servers = NULL,
+      resume_session_id = NULL
     ) {
       valid_modes <- c("default", "acceptEdits", "bypassPermissions")
       if (!permission_mode %in% valid_modes) {
@@ -103,6 +107,7 @@ ClaudeOptions <- R6::R6Class(
       self$timeout              <- timeout
       self$working_dir          <- working_dir %||% getwd()
       self$mcp_servers          <- mcp_servers
+      self$resume_session_id    <- resume_session_id
     },
 
     #' @description Build the CLI argument vector from these options.
@@ -135,6 +140,9 @@ ClaudeOptions <- R6::R6Class(
       }
       if (!is.null(self$max_tokens)) {
         args <- c(args, "--max-tokens", as.character(self$max_tokens))
+      }
+      if (!is.null(self$resume_session_id) && nzchar(self$resume_session_id)) {
+        args <- c(args, "--resume", self$resume_session_id)
       }
 
       args

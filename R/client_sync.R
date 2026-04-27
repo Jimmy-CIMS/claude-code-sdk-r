@@ -2,11 +2,13 @@
 #'
 #' @description
 #' `ClaudeClient` provides a blocking, multi-turn conversation interface to
-#' Claude Code CLI. It mirrors `ClaudeSyncClient` from the Java SDK.
+#' Claude Code CLI.
 #'
 #' Use `ClaudeClient$new()` (or the `claude_client()` helper) to create a
 #' client, then call `$connect()` for the first turn and `$query()` for
-#' follow-up turns. Always call `$close()` when done, or use `with_claude()`.
+#' follow-up turns. Each turn starts a fresh CLI subprocess and resumes the
+#' stored Claude session id. Always call `$close()` when done, or use
+#' `with_claude()`.
 #'
 #' @examples
 #' \dontrun{
@@ -48,7 +50,7 @@ ClaudeClient <- R6::R6Class(
     },
 
     #' @description
-    #' Start the Claude subprocess with an initial prompt and return all
+    #' Start a Claude session with an initial prompt and return all
     #' messages as a list.
     #' @param prompt Character string.
     #' @param on_message Optional `function(msg)` called for each streamed msg.
@@ -59,13 +61,9 @@ ClaudeClient <- R6::R6Class(
           "Already connected. Use {.fn $query} for follow-up turns."
         )
       }
-      private$proc      <- start_transport(prompt, private$options)
-      private$connected <- TRUE
-      result <- collect_messages(
-        private$proc, private$hooks, on_message,
-        timeout = private$options$timeout
-      )
+      result <- private$run_turn(prompt, on_message, resume = FALSE)
       private$store_result(result)
+      private$connected <- TRUE
       invisible(self)
     },
 
@@ -79,7 +77,7 @@ ClaudeClient <- R6::R6Class(
     },
 
     #' @description
-    #' Send a follow-up prompt; context is preserved within the same subprocess.
+    #' Send a follow-up prompt; context is preserved via Claude session resume.
     #' @param prompt Character string.
     #' @param on_message Optional callback per message.
     #' @return Invisibly returns `self`.
@@ -89,14 +87,7 @@ ClaudeClient <- R6::R6Class(
           "Not connected. Call {.fn $connect} first."
         )
       }
-      if (!private$proc$is_alive()) {
-        cli::cli_abort("Claude process has exited. Start a new client.")
-      }
-      send_message(private$proc, prompt)
-      result <- collect_messages(
-        private$proc, private$hooks, on_message,
-        timeout = private$options$timeout
-      )
+      result <- private$run_turn(prompt, on_message, resume = TRUE)
       private$store_result(result)
       invisible(self)
     },
@@ -110,12 +101,14 @@ ClaudeClient <- R6::R6Class(
       self$last_text
     },
 
-    #' @description Terminate the Claude subprocess.
+    #' @description Forget the stored Claude session and terminate any live subprocess.
     close = function() {
       if (!is.null(private$proc) && private$proc$is_alive()) {
         private$proc$kill()
       }
+      private$proc <- NULL
       private$connected <- FALSE
+      private$session_id <- NULL
       invisible(NULL)
     }
   ),
@@ -125,11 +118,34 @@ ClaudeClient <- R6::R6Class(
     options   = NULL,
     hooks     = NULL,
     connected = FALSE,
+    session_id = NULL,
 
     store_result = function(result) {
       self$last_messages <- result$messages
       self$last_text     <- result$text
       self$last_result   <- result$result
+      private$session_id <- extract_session_id(result)
+    },
+
+    run_turn = function(prompt, on_message, resume) {
+      if (resume) {
+        private$options$resume_session_id <- private$session_id
+      } else {
+        private$options$resume_session_id <- NULL
+      }
+
+      private$proc <- start_transport(prompt, private$options)
+      on.exit({
+        if (!is.null(private$proc) && private$proc$is_alive()) {
+          private$proc$kill()
+        }
+        private$proc <- NULL
+      }, add = TRUE)
+
+      collect_messages(
+        private$proc, private$hooks, on_message,
+        timeout = private$options$timeout
+      )
     }
   ),
 

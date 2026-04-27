@@ -72,7 +72,7 @@ claude_query <- function(
 #'
 #' @description
 #' Like `claude_query()` but returns a list with `text`, `messages`, `cost_usd`,
-#' and `subtype` fields.
+#' `subtype`, and `session_id` fields.
 #'
 #' @inheritParams claude_query
 #' @return A list with fields:
@@ -80,6 +80,7 @@ claude_query <- function(
 #'   * `messages` — list of all parsed messages
 #'   * `cost_usd` — numeric cost in USD (if available), or `NA`
 #'   * `subtype` — result subtype string, or `NA`
+#'   * `session_id` — Claude session id, or `NA`
 #'
 #' @examples
 #' \dontrun{
@@ -121,13 +122,15 @@ claude_execute <- function(
 
   result <- collect_messages(proc, hooks = NULL, on_message = on_message, timeout = timeout)
 
-  cost    <- result$result$cost_usd %||% NA_real_
-  subtype <- result$result$subtype  %||% NA_character_
+  cost       <- result$result$total_cost_usd %||% result$result$cost_usd %||% NA_real_
+  subtype    <- result$result$subtype %||% NA_character_
+  session_id <- extract_session_id(result) %||% NA_character_
 
   list(
     text     = result$text,
     messages = result$messages,
     cost_usd = cost,
-    subtype  = subtype
+    subtype  = subtype,
+    session_id = session_id
   )
 }

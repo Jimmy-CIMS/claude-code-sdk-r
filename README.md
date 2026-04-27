@@ -1,6 +1,6 @@
 # claudeAgentR
 
-An R SDK for programmatically interacting with [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), mirroring the design of the official Python and Java Claude Agent SDKs.
+An R SDK for programmatically interacting with [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
 
 ## Requirements
 
@@ -59,6 +59,9 @@ result <- with_claude(claude_client(), {
 })
 ```
 
+Each turn starts a fresh `claude --print` process and resumes the prior Claude
+session automatically.
+
 ### Asynchronous client (Shiny / event-loop)
 
 ```r
@@ -69,6 +72,13 @@ client <- claude_async_client(model = "claude-sonnet-4-20250514")
 p <- client$connect_text("What is 2 + 2?")
 p %...>% cat()
 
+later::run_now(timeout = 30)
+```
+
+Follow-up turns use the same API:
+
+```r
+client$query_text("Multiply that by 10") %...>% cat()
 later::run_now(timeout = 30)
 ```
 

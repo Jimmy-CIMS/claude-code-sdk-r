@@ -14,7 +14,8 @@ test_that("ClaudeOptions stores all fields correctly", {
     timeout          = 60,
     permission_mode  = "default",
     allowed_tools    = c("Read", "Bash"),
-    disallowed_tools = c("Write")
+    disallowed_tools = c("Write"),
+    resume_session_id = "session-123"
   )
   expect_equal(opts$model,            "claude-sonnet-4-20250514")
   expect_equal(opts$system_prompt,    "Be concise")
@@ -23,6 +24,7 @@ test_that("ClaudeOptions stores all fields correctly", {
   expect_equal(opts$timeout,          60)
   expect_equal(opts$allowed_tools,    c("Read", "Bash"))
   expect_equal(opts$disallowed_tools, c("Write"))
+  expect_equal(opts$resume_session_id, "session-123")
 })
 
 test_that("ClaudeOptions defaults working_dir to getwd()", {
@@ -65,7 +67,15 @@ test_that("to_cli_args includes required base flags", {
   args <- ClaudeOptions$new()$to_cli_args()
   expect_true("--output-format" %in% args)
   expect_true("stream-json"     %in% args)
+  expect_true("--verbose"       %in% args)
   expect_true("--print"         %in% args)
+})
+
+test_that("to_cli_args includes --resume when session id is set", {
+  args <- ClaudeOptions$new(resume_session_id = "session-123")$to_cli_args()
+  idx <- which(args == "--resume")
+  expect_length(idx, 1)
+  expect_equal(args[idx + 1], "session-123")
 })
 
 test_that("to_cli_args includes --model when set", {
@@ -133,18 +143,18 @@ test_that("to_cli_args adds no permission flag for default mode", {
 
 test_that("parse_stream_line handles valid JSON", {
   line <- '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}'
-  msg  <- parse_stream_line(line)
+  msg  <- claudeAgentR:::parse_stream_line(line)
   expect_equal(msg$type, "assistant")
 })
 
 test_that("parse_stream_line returns NULL for empty lines", {
-  expect_null(parse_stream_line(""))
-  expect_null(parse_stream_line("   "))
+  expect_null(claudeAgentR:::parse_stream_line(""))
+  expect_null(claudeAgentR:::parse_stream_line("   "))
 })
 
 test_that("parse_stream_line returns NULL and warns on invalid JSON", {
   expect_warning(
-    result <- parse_stream_line("{not valid json"),
+    result <- claudeAgentR:::parse_stream_line("{not valid json"),
     "Failed to parse"
   )
   expect_null(result)
@@ -158,7 +168,7 @@ test_that("extract_text concatenates text blocks", {
       list(type = "text", text = " world")
     ))
   )
-  expect_equal(extract_text(msg), "Hello world")
+  expect_equal(claudeAgentR:::extract_text(msg), "Hello world")
 })
 
 test_that("extract_text returns empty string when no text blocks", {
@@ -168,23 +178,37 @@ test_that("extract_text returns empty string when no text blocks", {
       list(type = "tool_use", name = "Bash", input = list(command = "ls"))
     ))
   )
-  expect_equal(extract_text(msg), "")
+  expect_equal(claudeAgentR:::extract_text(msg), "")
 })
 
 test_that("extract_text returns empty string when message is NULL", {
   msg <- list(type = "assistant", message = NULL)
-  expect_equal(extract_text(msg), "")
+  expect_equal(claudeAgentR:::extract_text(msg), "")
 })
 
 test_that("extract_text returns empty string when content is NULL", {
   msg <- list(type = "assistant", message = list(content = NULL))
-  expect_equal(extract_text(msg), "")
+  expect_equal(claudeAgentR:::extract_text(msg), "")
 })
 
 test_that("is_result_message detects result type", {
-  expect_true(is_result_message(list(type = "result")))
-  expect_false(is_result_message(list(type = "assistant")))
-  expect_false(is_result_message(list(type = "system")))
+  expect_true(claudeAgentR:::is_result_message(list(type = "result")))
+  expect_false(claudeAgentR:::is_result_message(list(type = "assistant")))
+  expect_false(claudeAgentR:::is_result_message(list(type = "system")))
+})
+
+test_that("extract_session_id prefers result session id and falls back to init message", {
+  from_result <- claudeAgentR:::extract_session_id(list(
+    result = list(session_id = "result-session"),
+    messages = list()
+  ))
+  expect_equal(from_result, "result-session")
+
+  from_init <- claudeAgentR:::extract_session_id(list(
+    result = list(),
+    messages = list(list(type = "system", subtype = "init", session_id = "init-session"))
+  ))
+  expect_equal(from_init, "init-session")
 })
 
 test_that("is_tool_use_message detects tool_use blocks", {
@@ -202,10 +226,10 @@ test_that("is_tool_use_message detects tool_use blocks", {
   )
   msg_no_message <- list(type = "assistant", message = NULL)
 
-  expect_true(is_tool_use_message(msg_with_tool))
-  expect_false(is_tool_use_message(msg_text_only))
-  expect_false(is_tool_use_message(msg_no_message))
-  expect_false(is_tool_use_message(list(type = "result")))
+  expect_true(claudeAgentR:::is_tool_use_message(msg_with_tool))
+  expect_false(claudeAgentR:::is_tool_use_message(msg_text_only))
+  expect_false(claudeAgentR:::is_tool_use_message(msg_no_message))
+  expect_false(claudeAgentR:::is_tool_use_message(list(type = "result")))
 })
 
 test_that("print_message handles NULL msg gracefully", {
@@ -214,8 +238,119 @@ test_that("print_message handles NULL msg gracefully", {
 })
 
 test_that("print_message handles result type", {
-  msg <- list(type = "result", subtype = "success", cost_usd = 0.001)
+  msg <- list(type = "result", subtype = "success", total_cost_usd = 0.001)
   expect_no_error(print_message(msg))
+})
+
+test_that("claude_execute returns total_cost_usd and session_id", {
+  local_mocked_bindings(
+    start_transport = function(prompt, options) {
+      list(
+        is_alive = function() FALSE,
+        kill = function() NULL
+      )
+    },
+    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300) {
+      list(
+        text = "Hello",
+        messages = list(list(type = "system", subtype = "init", session_id = "session-456")),
+        result = list(subtype = "success", total_cost_usd = 0.123, session_id = "session-456")
+      )
+    },
+    .package = "claudeAgentR"
+  )
+
+  res <- claude_execute("Hello")
+  expect_equal(res$text, "Hello")
+  expect_equal(res$cost_usd, 0.123)
+  expect_equal(res$subtype, "success")
+  expect_equal(res$session_id, "session-456")
+})
+
+test_that("ClaudeClient resumes session on follow-up turns", {
+  started <- list()
+
+  local_mocked_bindings(
+    start_transport = function(prompt, options) {
+      started[[length(started) + 1]] <<- list(
+        prompt = prompt,
+        resume_session_id = options$resume_session_id
+      )
+      structure(list(is_alive = function() FALSE, kill = function() NULL), class = "mock_proc")
+    },
+    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300) {
+      idx <- length(started)
+      sid <- if (idx == 1) "session-1" else started[[idx]]$resume_session_id
+      list(
+        text = paste("turn", idx),
+        messages = list(list(type = "system", subtype = "init", session_id = sid)),
+        result = list(type = "result", subtype = "success", session_id = sid, total_cost_usd = idx)
+      )
+    },
+    .package = "claudeAgentR"
+  )
+
+  client <- claude_client()
+  expect_equal(client$connect_text("first"), "turn 1")
+  expect_equal(client$query_text("second"), "turn 2")
+  expect_equal(started[[1]]$resume_session_id, NULL)
+  expect_equal(started[[2]]$resume_session_id, "session-1")
+  client$close()
+})
+
+test_that("ClaudeAsyncClient resumes session on follow-up turns", {
+  started <- list()
+
+  local_mocked_bindings(
+    start_transport = function(prompt, options) {
+      started[[length(started) + 1]] <<- list(
+        prompt = prompt,
+        resume_session_id = options$resume_session_id
+      )
+      sid <- if (length(started) == 1) "async-session-1" else options$resume_session_id
+      lines <- c(
+        jsonlite::toJSON(list(type = "system", subtype = "init", session_id = sid), auto_unbox = TRUE),
+        jsonlite::toJSON(list(type = "assistant", message = list(content = list(list(type = "text", text = paste("turn", length(started)))))), auto_unbox = TRUE),
+        jsonlite::toJSON(list(type = "result", subtype = "success", session_id = sid, total_cost_usd = length(started)), auto_unbox = TRUE)
+      )
+      state <- new.env(parent = emptyenv())
+      state$lines <- lines
+      list(
+        poll_io = function(timeout) list(output = if (length(state$lines) > 0) "ready" else "silent"),
+        read_output_lines = function(n = 100) {
+          out <- state$lines
+          state$lines <- character(0)
+          out
+        },
+        is_alive = function() TRUE,
+        read_all_error = function() "",
+        kill = function() NULL
+      )
+    },
+    .package = "claudeAgentR"
+  )
+
+  client <- claude_async_client()
+  r1 <- NULL
+  r2 <- NULL
+  drain_loop <- function(predicate, max_iter = 20) {
+    for (i in seq_len(max_iter)) {
+      later::run_now(timeout = 0.05)
+      if (predicate()) return(invisible(TRUE))
+    }
+    invisible(FALSE)
+  }
+
+  promises::`%...>%`(client$connect("first"), (function(value) r1 <<- value))
+  expect_true(drain_loop(function() !is.null(r1)))
+  promises::`%...>%`(client$query("second"), (function(value) r2 <<- value))
+  expect_true(drain_loop(function() !is.null(r2)))
+
+  expect_equal(r1$text, "turn 1")
+  expect_equal(r2$text, "turn 2")
+  expect_equal(started[[1]]$resume_session_id, NULL)
+  expect_equal(started[[2]]$resume_session_id, "async-session-1")
+  client$close()
 })
 
 test_that("print_message handles unknown type", {
@@ -415,7 +550,7 @@ test_that("find_claude_cli honours CLAUDE_CLI_PATH env var", {
   file.create(fake_cli)
   withr::with_envvar(
     list(CLAUDE_CLI_PATH = fake_cli),
-    expect_equal(find_claude_cli(), fake_cli)
+    expect_equal(claudeAgentR:::find_claude_cli(), fake_cli)
   )
   unlink(fake_cli)
 })
@@ -423,7 +558,7 @@ test_that("find_claude_cli honours CLAUDE_CLI_PATH env var", {
 test_that("find_claude_cli errors when CLI not found", {
   withr::with_envvar(
     list(CLAUDE_CLI_PATH = "", PATH = ""),
-    expect_error(find_claude_cli(), "Claude Code CLI not found")
+    expect_error(claudeAgentR:::find_claude_cli(), "Claude Code CLI not found")
   )
 })
 
@@ -433,13 +568,13 @@ test_that("find_claude_cli errors when CLI not found", {
 
 test_that("start_transport rejects empty prompt", {
   opts <- ClaudeOptions$new()
-  expect_error(start_transport("", opts),   "non-empty")
-  expect_error(start_transport("   ", opts), "non-empty")
+  expect_error(claudeAgentR:::start_transport("", opts),   "non-empty")
+  expect_error(claudeAgentR:::start_transport("   ", opts), "non-empty")
 })
 
 test_that("start_transport rejects NULL prompt", {
   opts <- ClaudeOptions$new()
-  expect_error(start_transport(NULL, opts), "non-empty")
+  expect_error(claudeAgentR:::start_transport(NULL, opts), "non-empty")
 })
 
 # ---------------------------------------------------------------------------
@@ -452,6 +587,6 @@ test_that("send_message rejects empty prompt without a real process", {
     is_alive    = function() TRUE,
     write_input = function(...) invisible(NULL)
   )
-  expect_error(send_message(fake_proc, ""),   "non-empty")
-  expect_error(send_message(fake_proc, "  "), "non-empty")
+  expect_error(claudeAgentR:::send_message(fake_proc, ""),   "non-empty")
+  expect_error(claudeAgentR:::send_message(fake_proc, "  "), "non-empty")
 })

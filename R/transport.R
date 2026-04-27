@@ -1,8 +1,8 @@
 #' Start a Claude CLI subprocess
 #'
 #' @description
-#' Spawns `claude` as a subprocess using `processx`, with bidirectional
-#' stdin/stdout pipes for streaming JSON-LD communication.
+#' Spawns `claude` as a subprocess using `processx`, with stdout/stderr pipes
+#' for `stream-json` output.
 #'
 #' @param prompt Initial prompt string.
 #' @param options A `ClaudeOptions` object.
@@ -29,6 +29,8 @@ start_transport <- function(prompt, options) {
     # tempfile() lives in tempdir() and is cleaned up at R session end
   }
 
+  args <- c(args, prompt)
+
   proc <- processx::process$new(
     command = cli_path,
     args    = args,
@@ -38,9 +40,6 @@ start_transport <- function(prompt, options) {
     wd      = options$working_dir,
     cleanup = TRUE
   )
-
-  # Send the first prompt via stdin so the CLI doesn't wait on the pipe
-  proc$write_input(paste0(prompt, "\n"))
 
   proc
 }
@@ -57,7 +56,9 @@ send_message <- function(proc, prompt) {
   if (!proc$is_alive()) {
     cli::cli_abort("Claude process is no longer running.")
   }
-  proc$write_input(paste0(prompt, "\n"))
+  cli::cli_abort(
+    "Follow-up prompts are not sent to a live Claude subprocess. Start a new transport with {.arg --resume} instead."
+  )
 }
 
 #' Read and stream all messages until result
@@ -154,8 +155,8 @@ collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 30
       }
     }
 
-    # Process exited without sending a result message
-    if (!proc$is_alive() && length(lines) == 0) {
+  # Process exited without sending a result message
+  if (!proc$is_alive() && length(lines) == 0) {
       stderr_out <- proc$read_all_error()
       if (nzchar(stderr_out)) {
         cli::cli_abort(c(
@@ -163,11 +164,9 @@ collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 30
           "x" = stderr_out
         ))
       }
-      break
+      cli::cli_abort("Claude process exited without emitting a result message.")
     }
   }
-
-  list(messages = messages, text = paste(text_parts, collapse = ""), result = NULL)
 }
 
 #' Locate the `claude` CLI executable
