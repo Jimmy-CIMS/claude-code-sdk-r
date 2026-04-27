@@ -83,10 +83,12 @@ collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 30
       cli::cli_abort("Timed out waiting for Claude response.")
     }
 
-    lines <- tryCatch(
-      proc$read_output_lines(n = 100, timeout = 200),
-      error = function(e) character(0)
-    )
+    ready <- tryCatch(proc$poll_io(200), error = function(e) c(output = "error"))
+    lines <- if (identical(ready[["output"]], "ready")) {
+      tryCatch(proc$read_output_lines(n = 100), error = function(e) character(0))
+    } else {
+      character(0)
+    }
 
     for (line in lines) {
       msg <- parse_stream_line(line)

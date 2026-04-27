@@ -143,7 +143,12 @@ ClaudeAsyncClient <- R6::R6Class(
           }
 
           tryCatch({
-            lines <- proc$read_output_lines(n = 100, timeout = 0)
+            ready <- proc$poll_io(0)
+            lines <- if (identical(ready[["output"]], "ready")) {
+              proc$read_output_lines(n = 100)
+            } else {
+              character(0)
+            }
 
             for (line in lines) {
               msg <- parse_stream_line(line)
