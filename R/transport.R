@@ -29,8 +29,6 @@ start_transport <- function(prompt, options) {
     # tempfile() lives in tempdir() and is cleaned up at R session end
   }
 
-  args <- c(args, prompt)
-
   proc <- processx::process$new(
     command = cli_path,
     args    = args,
@@ -40,6 +38,9 @@ start_transport <- function(prompt, options) {
     wd      = options$working_dir,
     cleanup = TRUE
   )
+
+  # Send the first prompt via stdin so the CLI doesn't wait on the pipe
+  proc$write_input(paste0(prompt, "\n"))
 
   proc
 }

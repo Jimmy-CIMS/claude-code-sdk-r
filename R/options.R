@@ -108,7 +108,7 @@ ClaudeOptions <- R6::R6Class(
     #' @description Build the CLI argument vector from these options.
     #' @return Character vector of CLI flags.
     to_cli_args = function() {
-      args <- c("--output-format", "stream-json", "--print")
+      args <- c("--output-format", "stream-json", "--verbose", "--print")
 
       if (!is.null(self$model)) {
         args <- c(args, "--model", self$model)
