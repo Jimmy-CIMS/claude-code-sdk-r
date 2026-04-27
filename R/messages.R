@@ -1,12 +1,19 @@
 #' Parse a single JSON line from the Claude CLI stream
 #'
 #' @param line A single character string (one line of stream-json output).
+#' @param max_buffer_size Maximum accepted line size in bytes.
 #' @return A named list with at minimum a `type` field, plus type-specific
 #'   fields. Returns `NULL` if the line is empty or cannot be parsed.
 #' @keywords internal
-parse_stream_line <- function(line) {
+parse_stream_line <- function(line, max_buffer_size = 1024 * 1024) {
   line <- trimws(line)
   if (!nzchar(line)) return(NULL)
+  if (nchar(line, type = "bytes") > max_buffer_size) {
+    cli::cli_warn(
+      "Skipping stream line larger than max_buffer_size ({max_buffer_size} bytes)."
+    )
+    return(NULL)
+  }
 
   tryCatch(
     jsonlite::fromJSON(line, simplifyVector = FALSE),

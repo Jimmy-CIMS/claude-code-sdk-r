@@ -144,7 +144,8 @@ ClaudeClient <- R6::R6Class(
 
       collect_messages(
         private$proc, private$hooks, on_message,
-        timeout = private$options$timeout
+        timeout = private$options$timeout,
+        max_buffer_size = private$options$max_buffer_size
       )
     }
   ),
@@ -165,9 +166,28 @@ ClaudeClient <- R6::R6Class(
 #' @param disallowed_tools Character vector of disallowed tool names.
 #' @param max_turns Integer maximum agent turns.
 #' @param max_tokens Integer maximum tokens per response.
+#' @param max_thinking_tokens Integer maximum thinking tokens.
+#' @param tools Character vector of base enabled tools.
 #' @param timeout Numeric seconds before subprocess timeout.
 #' @param working_dir Path to working directory.
 #' @param mcp_servers Named list of MCP server configurations.
+#' @param append_system_prompt Text appended to the system prompt.
+#' @param max_budget_usd Numeric maximum budget in USD.
+#' @param fallback_model Fallback model identifier.
+#' @param setting_sources Character vector of setting sources.
+#' @param add_dirs Character vector of additional directories.
+#' @param settings Custom settings file path.
+#' @param agents JSON string describing subagents.
+#' @param json_schema Named list JSON schema for structured output.
+#' @param include_partial_messages Whether to include partial stream messages.
+#' @param continue_conversation Whether to pass `--continue`.
+#' @param fork_session Whether to pass `--fork-session`.
+#' @param permission_prompt_tool_name Permission prompt tool name.
+#' @param plugins Character vector of plugin directories.
+#' @param extra_args Named list/vector of extra CLI flags.
+#' @param env Named environment overrides for the subprocess.
+#' @param max_buffer_size Maximum accepted stream JSON line size in bytes.
+#' @param user Optional Unix user to execute via `sudo -u`.
 #' @param hooks A `HookRegistry` object or `NULL`.
 #' @return A `ClaudeClient` object.
 #'
@@ -187,22 +207,60 @@ claude_client <- function(
   disallowed_tools = NULL,
   max_turns        = NULL,
   max_tokens       = NULL,
+  max_thinking_tokens = NULL,
+  tools            = NULL,
   timeout          = 300,
   working_dir      = NULL,
   mcp_servers      = NULL,
+  append_system_prompt = NULL,
+  max_budget_usd   = NULL,
+  fallback_model   = NULL,
+  setting_sources  = NULL,
+  add_dirs         = NULL,
+  settings         = NULL,
+  agents           = NULL,
+  json_schema      = NULL,
+  include_partial_messages = FALSE,
+  continue_conversation = FALSE,
+  fork_session     = FALSE,
+  permission_prompt_tool_name = NULL,
+  plugins          = NULL,
+  extra_args       = NULL,
+  env              = NULL,
+  max_buffer_size  = 1024 * 1024,
+  user             = NULL,
   hooks            = NULL
 ) {
   opts <- ClaudeOptions$new(
     model            = model,
     system_prompt    = system_prompt,
+    append_system_prompt = append_system_prompt,
     permission_mode  = permission_mode,
     allowed_tools    = allowed_tools,
     disallowed_tools = disallowed_tools,
     max_turns        = max_turns,
     max_tokens       = max_tokens,
+    max_thinking_tokens = max_thinking_tokens,
+    tools            = tools,
     timeout          = timeout,
     working_dir      = working_dir,
-    mcp_servers      = mcp_servers
+    mcp_servers      = mcp_servers,
+    max_budget_usd   = max_budget_usd,
+    fallback_model   = fallback_model,
+    setting_sources  = setting_sources,
+    add_dirs         = add_dirs,
+    settings         = settings,
+    agents           = agents,
+    json_schema      = json_schema,
+    include_partial_messages = include_partial_messages,
+    continue_conversation = continue_conversation,
+    fork_session     = fork_session,
+    permission_prompt_tool_name = permission_prompt_tool_name,
+    plugins          = plugins,
+    extra_args       = extra_args,
+    env              = env,
+    max_buffer_size  = max_buffer_size,
+    user             = user
   )
   ClaudeClient$new(options = opts, hooks = hooks)
 }

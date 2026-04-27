@@ -31,13 +31,22 @@ start_transport <- function(prompt, options) {
 
   args <- c(args, prompt)
 
+  command <- cli_path
+  if (!is.null(options$user) && nzchar(options$user)) {
+    command <- "sudo"
+    args <- c("-u", options$user, cli_path, args)
+  }
+
+  env <- normalize_env(options$env)
+
   proc <- processx::process$new(
-    command = cli_path,
+    command = command,
     args    = args,
     stdin   = "|",
     stdout  = "|",
     stderr  = "|",
     wd      = options$working_dir,
+    env     = env,
     cleanup = TRUE
   )
 
@@ -74,7 +83,13 @@ send_message <- function(proc, prompt) {
 #' @return A list with fields `messages` (all parsed msgs), `text` (final
 #'   concatenated assistant text), and `result` (the result message or `NULL`).
 #' @keywords internal
-collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 300) {
+collect_messages <- function(
+  proc,
+  hooks = NULL,
+  on_message = NULL,
+  timeout = 300,
+  max_buffer_size = 1024 * 1024
+) {
   messages        <- list()
   text_parts      <- character(0)
   tool_use_inputs <- list()   # keyed by tool_use id for post-hook dispatch
@@ -93,7 +108,7 @@ collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 30
     }
 
     for (line in lines) {
-      msg <- parse_stream_line(line)
+      msg <- parse_stream_line(line, max_buffer_size = max_buffer_size)
       if (is.null(msg)) next
 
       messages <- c(messages, list(msg))
@@ -167,6 +182,20 @@ collect_messages <- function(proc, hooks = NULL, on_message = NULL, timeout = 30
       cli::cli_abort("Claude process exited without emitting a result message.")
     }
   }
+}
+
+normalize_env <- function(env) {
+  if (is.null(env)) return(NULL)
+  if (is.list(env)) {
+    if (is.null(names(env)) || any(!nzchar(names(env)))) {
+      cli::cli_abort("{.arg env} must be a named list or named character vector.")
+    }
+    env <- vapply(env, as.character, character(1))
+  }
+  if (!is.character(env) || is.null(names(env)) || any(!nzchar(names(env)))) {
+    cli::cli_abort("{.arg env} must be a named list or named character vector.")
+  }
+  env
 }
 
 #' Locate the `claude` CLI executable

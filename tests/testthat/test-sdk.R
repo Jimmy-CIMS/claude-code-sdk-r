@@ -119,9 +119,11 @@ test_that("to_cli_args includes --disallowedTools when set", {
   expect_true("--disallowedTools" %in% args)
 })
 
-test_that("to_cli_args adds --accept-edits for acceptEdits mode", {
+test_that("to_cli_args adds --permission-mode for acceptEdits mode", {
   args <- ClaudeOptions$new(permission_mode = "acceptEdits")$to_cli_args()
-  expect_true("--accept-edits" %in% args)
+  idx <- which(args == "--permission-mode")
+  expect_length(idx, 1)
+  expect_equal(args[idx + 1], "acceptEdits")
   expect_false("--dangerously-skip-permissions" %in% args)
 })
 
@@ -131,10 +133,55 @@ test_that("to_cli_args adds --dangerously-skip-permissions for bypassPermissions
   expect_false("--accept-edits" %in% args)
 })
 
-test_that("to_cli_args adds no permission flag for default mode", {
+test_that("to_cli_args adds explicit --permission-mode for default mode", {
   args <- ClaudeOptions$new(permission_mode = "default")$to_cli_args()
-  expect_false("--accept-edits" %in% args)
+  idx <- which(args == "--permission-mode")
+  expect_length(idx, 1)
+  expect_equal(args[idx + 1], "default")
   expect_false("--dangerously-skip-permissions" %in% args)
+})
+
+test_that("to_cli_args includes advanced Java-parity flags", {
+  args <- ClaudeOptions$new(
+    tools = c("Read", "Write"),
+    max_thinking_tokens = 2048,
+    max_budget_usd = 1.5,
+    fallback_model = "claude-haiku-4-5-20251001",
+    append_system_prompt = "Extra rules",
+    continue_conversation = TRUE,
+    fork_session = TRUE,
+    include_partial_messages = TRUE,
+    agents = "{\"researcher\":{}}",
+    json_schema = list(type = "object"),
+    add_dirs = c("/tmp/a", "/tmp/b"),
+    settings = "settings.json",
+    setting_sources = c("user", "project"),
+    permission_prompt_tool_name = "stdio",
+    plugins = c("/plugins/one"),
+    extra_args = list(foo = "bar", dry_run = NULL)
+  )$to_cli_args()
+
+  expect_true("--tools" %in% args)
+  expect_true("Read,Write" %in% args)
+  expect_true("--max-thinking-tokens" %in% args)
+  expect_true("2048" %in% args)
+  expect_true("--max-budget-usd" %in% args)
+  expect_true("1.5" %in% args)
+  expect_true("--fallback-model" %in% args)
+  expect_true("--append-system-prompt" %in% args)
+  expect_true("--continue" %in% args)
+  expect_true("--fork-session" %in% args)
+  expect_true("--include-partial-messages" %in% args)
+  expect_true("--agents" %in% args)
+  expect_true("--json-schema" %in% args)
+  expect_equal(sum(args == "--add-dir"), 2)
+  expect_true("--settings" %in% args)
+  expect_true("--setting-sources" %in% args)
+  expect_true("user,project" %in% args)
+  expect_true("--permission-prompt-tool" %in% args)
+  expect_true("--plugin-dir" %in% args)
+  expect_true("--foo" %in% args)
+  expect_true("--dry_run" %in% args)
 })
 
 # ---------------------------------------------------------------------------
@@ -156,6 +203,18 @@ test_that("parse_stream_line returns NULL and warns on invalid JSON", {
   expect_warning(
     result <- claudeAgentR:::parse_stream_line("{not valid json"),
     "Failed to parse"
+  )
+  expect_null(result)
+})
+
+test_that("parse_stream_line enforces max_buffer_size", {
+  line <- jsonlite::toJSON(
+    list(type = "assistant", message = list(content = list(list(type = "text", text = "Hello")))),
+    auto_unbox = TRUE
+  )
+  expect_warning(
+    result <- claudeAgentR:::parse_stream_line(line, max_buffer_size = 10),
+    "larger than max_buffer_size"
   )
   expect_null(result)
 })
@@ -250,7 +309,7 @@ test_that("claude_execute returns total_cost_usd and session_id", {
         kill = function() NULL
       )
     },
-    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300) {
+    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300, max_buffer_size = 1024 * 1024) {
       list(
         text = "Hello",
         messages = list(list(type = "system", subtype = "init", session_id = "session-456")),
@@ -278,7 +337,7 @@ test_that("ClaudeClient resumes session on follow-up turns", {
       )
       structure(list(is_alive = function() FALSE, kill = function() NULL), class = "mock_proc")
     },
-    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300) {
+    collect_messages = function(proc, hooks = NULL, on_message = NULL, timeout = 300, max_buffer_size = 1024 * 1024) {
       idx <- length(started)
       sid <- if (idx == 1) "session-1" else started[[idx]]$resume_session_id
       list(
