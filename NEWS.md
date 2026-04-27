@@ -1,3 +1,14 @@
+# claudeAgentR 0.1.1
+
+* Aligns SDK session handling with the current Claude CLI by resuming
+  conversations with Claude `session_id` instead of relying on a long-lived
+  subprocess.
+* Updates transport startup to pass prompts as CLI arguments and include the
+  required `--verbose` flag for `stream-json` output.
+* Fixes cost parsing to read `total_cost_usd` from result messages.
+* Improves sync/async client recovery and adds test coverage for session resume
+  behavior and current CLI result schema.
+
 # claudeAgentR 0.1.0
 
 Initial release.
