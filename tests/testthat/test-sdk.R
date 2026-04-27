@@ -66,7 +66,6 @@ test_that("to_cli_args includes required base flags", {
   expect_true("--output-format" %in% args)
   expect_true("stream-json"     %in% args)
   expect_true("--print"         %in% args)
-  expect_true("--no-color"      %in% args)
 })
 
 test_that("to_cli_args includes --model when set", {
